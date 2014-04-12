@@ -14,6 +14,7 @@ class HackerNews
   BASE_URL           = "https://news.ycombinator.com"
   ITEM_URL           = "#{BASE_URL}/item?id=%s"
   USER_URL           = "#{BASE_URL}/user?id=%s"
+  SAVED_URL          = "#{BASE_URL}/saved?id=%s"
   LOGIN_SUBMIT_URL   = "#{BASE_URL}/y"
   COMMENT_SUBMIT_URL = "#{BASE_URL}/r"
 
@@ -27,9 +28,6 @@ class HackerNews
 
   # Log into Hacker News with the specified username and password.
   def login(username, password)
-    login_url = get(BASE_URL).match(/href="([^"]+)">login<\/a>/)[1]
-    form_html = get(BASE_URL + '/' + login_url)
-    fnid = form_html.match(/<input type=hidden name="fnid" value="([^"]+)"/)[1]
     response = post(LOGIN_SUBMIT_URL, 'fnid' => fnid, 'u' => username, 'p' => password)
     @username = username
     @password = password
@@ -47,6 +45,14 @@ class HackerNews
   def average_karma
     require_login!
     user_page.match(/<td valign=top>avg:<\/td><td>([\d\.]+)<\/td>/)[1]
+  end
+
+  # Retrieve the user's saved stories
+  def saved
+    require_login!
+
+    @saved ||= get(SAVED_URL % @username).force_encoding("UTF-8")
+    parse_stories @saved
   end
 
   # Retrieves the user page html for the specified username (or the current logged in user if none is specified).
@@ -113,7 +119,38 @@ class HackerNews
     comments.compact
   end
 
+  def parse_stories source
+    story_regexp = Regexp.new("<td class=\"title\"><a href=\"(.*?)\"( rel=\"nofollow\")?>(.*?)</a>(.*?)?<span class=\"comhead\">", Regexp::MULTILINE)
+    stories = source.scan(story_regexp)
+    stories_stack = []
+    stories.collect! do |story|
+      story_hash = {
+        :url   => story[0],
+        :title => story[2]
+      }
+      stories_stack.push(story_hash)
+    end
+    stories_stack
+  end
+
+  def cookie
+    @cookie
+  end
+
   private
+
+    def fnid
+      form_html = get(BASE_URL + '/' + login_url)
+      fnid_match = form_html.match(/<input type=hidden name="fnid" value="([^"]+)"/)
+      raise CommsError unless fnid_match
+      fnid_match[1]
+    end
+
+    def login_url
+      login_match = get(BASE_URL).match(/href="([^"]+)">login<\/a>/)
+      raise CommsError unless login_match
+      login_match[1]
+    end
 
     def url_path_and_query(url)
       if url.path and url.query
@@ -136,7 +173,7 @@ class HackerNews
     def post(url, data)
       url = URI.parse(url)
 
-      req = Net::HTTP::Post.new(url.path)
+      req = Net::HTTP::Post.new(url.path, build_header)
       req.set_form_data(data)
 
       http = Net::HTTP.new(url.host, url.port)
